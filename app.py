@@ -1,3 +1,35 @@
+import hmac
+import io
+import os
+import re
+import time
+import wave
+from threading import Lock
+
+import requests
+from flask import Flask, Response, jsonify, request
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 320000
+token = os.environ.get("BUDDY_TOKEN", "").encode()
+api_key = os.environ.get("OPENAI_API_KEY", "")
+api_url = "https://api.openai.com/v1"
+headers = {"Authorization": f"Bearer {api_key}"}
+sessions = {}
+turn_lock = Lock()
+last_turn = float("-inf")
+
+
+@app.get("/health")
+def health():
+    ready = len(token) >= 24 and bool(api_key)
+    return jsonify(ready=ready), 200 if ready else 503
+
+
+@app.post("/v1/turn")
+def turn():
+    if len(token) < 24 or not api_key:
+        return jsonify(error="Backend needs configuration"), 503
     if not hmac.compare_digest(request.headers.get("Authorization", "").encode(), b"Bearer " + token):
         return jsonify(error="Invalid device token"), 401
 
