@@ -1,35 +1,3 @@
-import hmac
-import io
-import os
-import re
-import time
-import wave
-from threading import Lock
-
-import requests
-from flask import Flask, Response, jsonify, request
-
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 320000
-token = os.environ.get("BUDDY_TOKEN", "").encode()
-api_key = os.environ.get("OPENAI_API_KEY", "")
-api_url = "https://api.openai.com/v1"
-headers = {"Authorization": f"Bearer {api_key}"}
-sessions = {}
-turn_lock = Lock()
-last_turn = float("-inf")
-
-
-@app.get("/health")
-def health():
-    ready = len(token) >= 24 and bool(api_key)
-    return jsonify(ready=ready), 200 if ready else 503
-
-
-@app.post("/v1/turn")
-def turn():
-    if len(token) < 24 or not api_key:
-        return jsonify(error="Backend needs configuration"), 503
     if not hmac.compare_digest(request.headers.get("Authorization", "").encode(), b"Bearer " + token):
         return jsonify(error="Invalid device token"), 401
 
@@ -48,8 +16,28 @@ def turn():
     try:
         return process_turn(session_id, pcm)
     except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
-        upstream_status = exc.response.status_code if isinstance(exc, requests.HTTPError) else None
-        app.logger.warning("Voice service failed (%s, status %s)", type(exc).__name__, upstream_status)
+        response = exc.response if isinstance(exc, requests.RequestException) else None
+        upstream_status = response.status_code if response is not None else None
+        code = "unavailable"
+        if response is not None:
+            try:
+                error = response.json()["error"]
+                value = error.get("code") if isinstance(error, dict) else None
+                if isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", value):
+                    code = value
+            except (ValueError, KeyError, TypeError):
+                pass
+
+        upstream_request = exc.request if isinstance(exc, requests.RequestException) else None
+        stage = {
+            f"{api_url}/audio/transcriptions": "transcription",
+            f"{api_url}/chat/completions": "chat",
+            f"{api_url}/audio/speech": "speech",
+        }.get(getattr(upstream_request, "url", None), "unknown")
+        app.logger.warning(
+            "Voice service failed (%s, status %s, stage %s, code %s)",
+            type(exc).__name__, upstream_status, stage, code,
+        )
         return jsonify(error="Voice provider request failed"), 502
     finally:
         turn_lock.release()
