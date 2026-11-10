@@ -1,12 +1,16 @@
+import base64
 import hmac
 import io
 import os
 import re
 import time
+import textwrap
+import unicodedata
 import wave
 from threading import Lock
 
 import requests
+from bidi.algorithm import get_base_level, get_display
 from flask import Flask, Response, jsonify, request
 
 app = Flask(__name__)
@@ -139,4 +143,25 @@ def process_turn(session_id, pcm):
     sessions[session_id] = (time.monotonic(), [
         *history, messages[-1], {"role": "assistant", "content": answer}
     ][-6:])
-    return Response(bytes(spoken), mimetype="application/octet-stream")
+    response = Response(bytes(spoken), mimetype="application/octet-stream")
+    if request.headers.get("X-Buddy-Captions") == "1":
+        response.headers["X-Buddy-Text"] = encode_captions(answer)
+    return response
+
+
+def encode_captions(answer):
+    # Match the device's single-cell ASCII and unpointed Hebrew glyphs.
+    text = unicodedata.normalize("NFKD", answer).translate(str.maketrans({
+        "’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-",
+        "־": "-", "״": '"', "׳": "'", "×": "x",
+    }))
+    text = "".join(
+        char if (" " <= char <= "~" or "א" <= char <= "ת") else
+        " " if char.isspace() else "?"
+        for char in text
+        if unicodedata.category(char) not in {"Mn", "Me", "Cf"}
+    )
+    direction = "R" if get_base_level(text) else "L"
+    lines = textwrap.wrap(text, width=26, max_lines=32, placeholder="...")
+    visual = "\n".join(direction + get_display(line, base_dir=direction) for line in lines)
+    return base64.b64encode(visual.encode("utf-8")).decode("ascii")
