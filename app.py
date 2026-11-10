@@ -123,7 +123,7 @@ def process_turn(session_id, pcm):
     with requests.post(
         f"{api_url}/audio/speech", headers=headers, timeout=(5, 25), stream=True,
         json={"model": os.getenv("SPEECH_MODEL", "gpt-4o-mini-tts"),
-              "voice": "coral", "input": answer, "response_format": "pcm"},
+              "voice": os.getenv("SPEECH_VOICE", "marin"), "input": answer, "response_format": "pcm"},
     ) as speech:
         speech.raise_for_status()
         spoken = bytearray()
